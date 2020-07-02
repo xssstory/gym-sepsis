@@ -42,8 +42,9 @@ class SepsisEnv(gym.Env):
     """
     metadata = {'render.modes': ['ansi']}
 
-    def __init__(self, args, starting_state=None, verbose=False):
+    def __init__(self, args, training=True, starting_state=None, verbose=False):
         module_path = os.path.dirname(__file__)
+        seed = args.seed if training else args.seed + 1
         self.verbose = verbose
         self.state_model = keras.models.load_model(os.path.join(module_path, STATE_MODEL))
         self.termination_model = keras.models.load_model(os.path.join(module_path, TERMINATION_MODEL))
@@ -51,7 +52,7 @@ class SepsisEnv(gym.Env):
         self.starting_states = np.load(os.path.join(module_path, STARTING_STATES_VALUES))['sepsis_starting_states']
         self.state_buffer = deque([], maxlen=args.history_length)
         self.window = args.history_length
-        self.seed(args.seed)
+        self.seed(seed)
         # self.action_space = spaces.Discrete(24)
         self.device = args.device
 
@@ -135,14 +136,6 @@ class SepsisEnv(gym.Env):
     def render(self, mode='ansi'):
         df = pd.DataFrame(self.memory, columns=features, index=range(0, 10))
         print(df)
-
-  # Uses loss of life as terminal signal
-    def train(self):
-        self.training = True
-
-  # Uses standard terminal signal
-    def eval(self):
-        self.training = False
     
     def action_space(self):
         return NUM_ACTIONS
