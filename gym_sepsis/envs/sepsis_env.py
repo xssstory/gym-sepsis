@@ -8,9 +8,12 @@ import pandas as pd
 from gym import spaces
 import torch
 
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import tensorflow as tf
-gpu_options = tf.compat.v1.GPUOptions(allow_growth=True)
-sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options)) 
+# gpu_options = tf.compat.v1.GPUOptions(allow_growth=True)
+# sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options)) 
 
 STATE_MODEL = "model/sepsis_states.model"
 TERMINATION_MODEL = "model/sepsis_termination.model"
@@ -43,68 +46,74 @@ class SepsisEnv(gym.Env):
     metadata = {'render.modes': ['ansi']}
 
     def __init__(self, args, training=True, starting_state=None, verbose=False):
-        module_path = os.path.dirname(__file__)
-        seed = args.seed if training else args.seed + 1
-        self.verbose = verbose
-        self.state_model = keras.models.load_model(os.path.join(module_path, STATE_MODEL))
-        self.termination_model = keras.models.load_model(os.path.join(module_path, TERMINATION_MODEL))
-        self.outcome_model = keras.models.load_model(os.path.join(module_path, OUTCOME_MODEL))
-        self.starting_states = np.load(os.path.join(module_path, STARTING_STATES_VALUES))['sepsis_starting_states']
-        self.state_buffer = deque([], maxlen=args.history_length)
-        self.window = args.history_length
-        self.seed(seed)
-        # self.action_space = spaces.Discrete(24)
-        self.device = args.device
+        self.seg_graph = tf.Graph()
+        self.sess = tf.Session(graph=self.seg_graph)
+        keras.backend.set_session(self.sess)
+        with self.seg_graph.as_default():
+            module_path = os.path.dirname(__file__)
+            seed = args.seed if training else args.seed + 1
+            self.verbose = verbose
+            self.state_model = keras.models.load_model(os.path.join(module_path, STATE_MODEL))
+            self.termination_model = keras.models.load_model(os.path.join(module_path, TERMINATION_MODEL))
+            self.outcome_model = keras.models.load_model(os.path.join(module_path, OUTCOME_MODEL))
+            self.starting_states = np.load(os.path.join(module_path, STARTING_STATES_VALUES))['sepsis_starting_states']
+            self.state_buffer = deque([], maxlen=args.history_length)
+            self.window = args.history_length
+            self.seed(seed)
+            # self.action_space = spaces.Discrete(24)
+            self.device = args.device
 
-        # use a pixel to represent next state
-        self.observation_space = spaces.Box(low=0, high=NUM_ACTIONS, shape=(NUM_FEATURES-2, 1, 1),
-                                            dtype=np.float32)
-        self.reset(starting_state=starting_state)
-        return
+            # use a pixel to represent next state
+            self.observation_space = spaces.Box(low=0, high=NUM_ACTIONS, shape=(NUM_FEATURES-2, 1, 1),
+                                                dtype=np.float32)
+            self.reset(starting_state=starting_state)
+            return
 
     def step(self, action):
         # create memory of present
-        self.memory.append(np.append(np.append(self.s.reshape((1, NUM_FEATURES - 2)), action), self.state_idx))
-        if self.verbose:
-            print("running on memory: ", self.memory)
+        keras.backend.set_session(self.sess)
+        with self.seg_graph.as_default():
+            self.memory.append(np.append(np.append(self.s.reshape((1, NUM_FEATURES - 2)), action), self.state_idx))
+            if self.verbose:
+                print("running on memory: ", self.memory)
 
-        memory_array = np.expand_dims(self.memory, 0)
-        next_state = self.state_model.predict(memory_array[:, :, :-1])
+            memory_array = np.expand_dims(self.memory, 0)
+            next_state = self.state_model.predict(memory_array[:, :, :-1])
 
-        # overwrite constant variables (these should't change during episode)
-        constants = ['age', 'race_white', 'race_black', 'race_hispanic',
-                     'race_other', 'height', 'weight']
-        for constant in constants:
-            idx = features.index(constant)
-            val = self.state_0[idx]
-            next_state[0, idx] = val
+            # overwrite constant variables (these should't change during episode)
+            constants = ['age', 'race_white', 'race_black', 'race_hispanic',
+                        'race_other', 'height', 'weight']
+            for constant in constants:
+                idx = features.index(constant)
+                val = self.state_0[idx]
+                next_state[0, idx] = val
 
-        termination = self.termination_model.predict(memory_array)
-        outcome = self.outcome_model.predict(memory_array)
+            termination = self.termination_model.predict(memory_array)
+            outcome = self.outcome_model.predict(memory_array)
 
-        termination_categories = ['continue', 'done']
-        outcome_categories = ['death', 'release']
+            termination_categories = ['continue', 'done']
+            outcome_categories = ['death', 'release']
 
-        termination_state = termination_categories[np.argmax(termination)]
-        outcome_state = outcome_categories[np.argmax(outcome)]
+            termination_state = termination_categories[np.argmax(termination)]
+            outcome_state = outcome_categories[np.argmax(outcome)]
 
-        reward = 0
-        done = False
+            reward = 0
+            done = False
 
-        if termination_state == 'done':
-            done = True
-            if outcome_state == 'death':
-                reward = -15
-            else:
-                reward = 15
+            if termination_state == 'done':
+                done = True
+                if outcome_state == 'death':
+                    reward = -15
+                else:
+                    reward = 15
 
-        # keep next state in memory
-        self.s = next_state.reshape(46, 1, 1)
-        self.state_idx += 1
-        self.rewards.append(reward)
-        self.dones.append(done)
-        self.state_buffer.append(torch.tensor(self.s, device=self.device, dtype=torch.float32))
-        return torch.stack(list(self.state_buffer), 0), reward, done, {"prob" : 1}
+            # keep next state in memory
+            self.s = next_state.reshape(46, 1, 1)
+            self.state_idx += 1
+            self.rewards.append(reward)
+            self.dones.append(done)
+            self.state_buffer.append(torch.tensor(self.s, device=self.device, dtype=torch.float32))
+            return torch.stack(list(self.state_buffer), 0), reward, done, {"prob" : 1}
 
     def _reset_buffer(self):
         for _ in range(self.window):
@@ -139,3 +148,10 @@ class SepsisEnv(gym.Env):
     
     def action_space(self):
         return NUM_ACTIONS
+
+    def close(self):
+        keras.backend.set_session(self.sess)
+        keras.backend.clear_session()
+        del self.state_model
+        del self.termination_model
+        del self.outcome_model
