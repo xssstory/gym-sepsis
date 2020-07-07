@@ -103,9 +103,9 @@ class SepsisEnv(gym.Env):
             if termination_state == 'done':
                 done = True
                 if outcome_state == 'death':
-                    reward = -15
+                    reward = -1
                 else:
-                    reward = 15
+                    reward = 1
 
             # keep next state in memory
             self.s = next_state.reshape(46, 1, 1)
