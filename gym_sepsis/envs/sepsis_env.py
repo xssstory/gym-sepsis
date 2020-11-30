@@ -155,3 +155,4 @@ class SepsisEnv(gym.Env):
         del self.state_model
         del self.termination_model
         del self.outcome_model
+
